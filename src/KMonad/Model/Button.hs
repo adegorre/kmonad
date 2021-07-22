@@ -26,6 +26,7 @@ module KMonad.Model.Button
   -- * Simple buttons
   -- $simple
   , emitB
+  , strongMod
   , modded
   , layerToggle
   , layerSwitch
@@ -308,12 +309,11 @@ tapHoldNextRelease ms t h = onPress $ do
       if
         -- If the next event is my own release: act like tapped
         | p e -> onRelSelf
-        -- If the next event is another release that was pressed after me
-        | isRel && (e^.keycode `elem` ks) -> onRelOther e
+        -- If the next event is another release: if it was pressed after me, switch to hold mode;
+        -- if it was pressed before me, switch to tap mode (remark: this case is not be triggered by other tap-hold buttons)
+        | isRel -> if e^.keycode `elem` ks then onRelOtherPressedAfterMe e else onRelOtherPressedBeforeMe                      
         -- If the next event is a press, store and recurse
-        | not isRel -> go (ms' - r^.elapsed) (e^.keycode : ks) *> pure NoCatch
-        -- If the next event is a release of some button pressed before me, recurse
-        | otherwise -> go (ms' - r^.elapsed) ks *> pure NoCatch
+        | otherwise {- not isRel -} -> go (ms' - r^.elapsed) (e^.keycode : ks) *> pure NoCatch
 
     onTimeout :: MonadK m =>  m ()
     onTimeout = press h *> hold False
@@ -321,8 +321,11 @@ tapHoldNextRelease ms t h = onPress $ do
     onRelSelf :: MonadK m => m Catch
     onRelSelf = tap t *> hold False *> pure Catch
 
-    onRelOther :: MonadK m => KeyEvent -> m Catch
-    onRelOther e = press h *> hold False *> inject e *> pure Catch
+    onRelOtherPressedAfterMe :: MonadK m => KeyEvent -> m Catch
+    onRelOtherPressedAfterMe e = press h *> hold False *> inject e *> pure Catch
+
+    onRelOtherPressedBeforeMe :: MonadK m => m Catch
+    onRelOtherPressedBeforeMe = tap t *> hold False *> pure NoCatch
 
 
 -- | Create a 'Button' that contains a number of delays and 'Button's. As long
@@ -341,23 +344,27 @@ multiTap l bs = onPress $ go bs
       --     list and we are done.
       -- 2B. If we do detect the release of the key that triggered this action,
       --     we must now keep waiting to detect another press.
-      -- 2C. If we detect another (unrelated) press event we cancel the
-      --     remaining of the multi-tap sequence and trigger a tap on the
-      --     current button of the sequence.
+      -- 2C. If we detect another (unrelated) event we cancel the remaining of
+      --     the multi-tap sequence and trigger a tap on the current button of
+      --     the sequence.
+      --     Remark: tap-hold-next-release buttons releases are not detected in
+      --     this case (which is good, as thnr in a roll should be a tap).
+      --     strong-mod releases are always reliably detected (according to their
+      --     purpose, so this is very fortunate!), but other releases may be 
+      --     detected or not (this is a FIXME!).
       -- 3A. After 2B, if we do not detect a press before the interval is up,
       --     we know a tap occurred, so we tap the current button and we are
       --     done.
       -- 3B. If we detect another press of the same key, then the user is
       --     descending into the buttons tied to this multi-tap, so we recurse
       --     on the remaining buttons.
-      -- 3C. If we detect any other (unrelated) press event, then the multi-tap
-      --     sequence is cancelled like in 2C. We trigger a tap of the current
-      --     button of the sequence.
+      -- 3C. If we detect any other (unrelated) event, then the multi-tap 
+      --     sequence is cancelled like in 2C (same remark applies). We trigger
+      --     a tap of the current button of the sequence.
       let doNext pred onTimeout next ms = tHookF InputHook ms onTimeout $ \t -> do
             pr <- pred
-            if | pr (t^.event)      -> next (ms - t^.elapsed) $> Catch
-               | isPress (t^.event) -> tap b                  $> NoCatch
-               | otherwise          -> pure NoCatch
+            if pr $ t^.event then Catch <$ next (ms - t^.elapsed)
+              else NoCatch <$ tap b
       doNext (matchMy Release)
              (press b)
              (doNext (matchMy Press) (tap b) (\_ -> go bs'))
@@ -424,3 +431,20 @@ stickyKey ms b = onPress $ go
                *> inject (t^.event)
                *> after 3 (runAction $ b^.releaseAction)
                $> Catch)
+
+-- | A button acting like its argument, except that the argument release is 
+-- postponed until either something else happens or the timeout runs out.
+-- Purpose: use it for modifiers so that they work in a roll with buttons
+-- having a delay (such as multi-tap and tap-hold-next-release).
+strongMod :: Milliseconds  -> Button -> Button
+strongMod ms b =
+  mkButton 
+  (do
+    runAction $ b^.pressAction)
+  (do
+      tHookF InputHook ms (do runAction $ b^.releaseAction)
+        (\_ -> do
+          whenDone (do runAction $ b^.releaseAction)
+          pure NoCatch)
+      )
+

@@ -280,7 +280,8 @@ keywordButtons =
   , ("cmd-button"     , KCommand     <$> lexeme textP <*> optional (lexeme textP))
   , ("pause"          , KPause . fromIntegral <$> numP)
   , ("sticky-key"     , KStickyKey   <$> lexeme numP <*> buttonP)
-  ]
+  , ("strong-mod"     , KStrongMod   <$> lexeme numP <*> buttonP)
+  ]                                                                     
  where
   timed :: Parser [(Int, DefButton)]
   timed = many ((,) <$> lexeme numP <*> lexeme buttonP)

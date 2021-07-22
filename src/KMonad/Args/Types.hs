@@ -102,6 +102,7 @@ data DefButton
   | KCommand Text (Maybe Text)             -- ^ Execute a shell command on press, as well
                                            --   as possibly on release
   | KStickyKey Int DefButton               -- ^ Act as if a button is pressed for a period of time
+  | KStrongMod Int DefButton               -- ^ Delays the release of the button to either next event or timeout
   | KTrans                                 -- ^ Transparent button that does nothing
   | KBlock                                 -- ^ Button that catches event
   deriving Show
